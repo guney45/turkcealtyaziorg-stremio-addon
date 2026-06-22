@@ -1,0 +1,31 @@
+# Kendi sunucunda çalıştırmak için: addon + FlareSolverr birlikte.
+#
+# ÖNEMLİ: Anti-bot cookie'si (cf_clearance) çıkış IP'sine bağlıdır. Bu yüzden
+# addon ile FlareSolverr aynı ağda/sunucuda çalışmalı ki ikisi de aynı genel
+# IP'den çıksın; aksi halde FlareSolverr'ın aldığı cookie addon'da geçersiz olur.
+#
+# Kullanım:
+#   HOST_URL=https://senin-adresin docker compose up -d --build
+
+services:
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - LOG_LEVEL=info
+      - TZ=Europe/Istanbul
+    restart: unless-stopped
+
+  addon:
+    build: .
+    container_name: turkcealtyaziorg-addon
+    depends_on:
+      - flaresolverr
+    environment:
+      - PORT=7000
+      - HOST_URL=${HOST_URL:?HOST_URL gerekli (addon'un dış adresi)}
+      - SITE_URL=https://turkcealtyazi.org
+      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
+    ports:
+      - "7000:7000"
+    restart: unless-stopped

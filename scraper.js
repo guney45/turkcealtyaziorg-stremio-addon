@@ -1,13 +1,13 @@
-const Axios = require('axios').default;
-const header = require("./header")
 const cheerio = require('cheerio');
 require("dotenv").config({ path: "./.env" });
-const sslfix = require("./sslfix");
-const { setupCache } = require("axios-cache-interceptor");
+const { siteGet } = require("./client");
+const { SITE_URL } = require("./flaresolverr");
 
-
-const instance = Axios.create();
-const axios = setupCache(instance);
+// Arama (autocomplete) endpoint yolu. Sitenin yapısına göre değişebildiği için
+// SEARCH_PATH ile elle verilebilir; verilmezse bilinen iki aday sırayla denenir.
+const SEARCH_PATHS = process.env.SEARCH_PATH
+    ? [process.env.SEARCH_PATH]
+    : ["/ajax/things_.php", "/things_.php"];
 
 function parseSearchResults(data) {
     if (Array.isArray(data)) {
@@ -35,30 +35,29 @@ function parseSearchResults(data) {
 }
 
 async function mainPageFinder(imdbId) {
-    try {
-        var editedId = imdbId.substring(2);
+    var editedId = imdbId.substring(2);
 
-        const response = await axios({url: process.env.PROXY_URL + `/things_.php?t=99&term=${editedId}`, method: "GET", headers: header })
+    for (const searchPath of SEARCH_PATHS) {
+        try {
+            const url = `${SITE_URL}${searchPath}?t=99&term=${editedId}`;
+            const response = await siteGet(url);
+            const mainPageData = parseSearchResults(response.data)[0];
 
-        const mainPageData = parseSearchResults(response.data)[0];
-
-
-        if (response.status === 200 && mainPageData && mainPageData.url) {
-            return process.env.PROXY_URL + mainPageData.url
-        } else {
-            return ""
+            if (response.status === 200 && mainPageData && mainPageData.url) {
+                return SITE_URL + mainPageData.url;
+            }
+        } catch (error) {
+            console.log(`mainPageFinder denemesi başarısız (${searchPath}):`, error.message);
         }
-    } catch (error) {
-        console.log("mainPageFinder not found", error);
     }
+
+    console.log("mainPageFinder: sonuç bulunamadı", imdbId);
+    return "";
 }
 
 async function subIDfinder(subLink) {
     try {
-
-
-        const response = await axios({url: subLink, method: "GET", headers: header });
-
+        const response = await siteGet(subLink);
 
         $ = cheerio.load(response.data)
         let subIDs = []
@@ -73,7 +72,8 @@ async function subIDfinder(subLink) {
         return subIDs
 
     } catch (e) {
-        console.log("Sub IDs could not found!", e)
+        console.log("Sub IDs could not found!", e.message)
+        return []
     }
 }
 
@@ -88,13 +88,13 @@ async function subtitlePageFinder(imdbId, type, season, episode) {
         const mainPageURL = await mainPageFinder(imdbId)
         if (typeof(mainPageURL) != "undefined" && mainPageURL.length > 0) {
 
-            const mainPageHTML = await axios({url: mainPageURL, method: "GET", headers: header })
+            const mainPageHTML = await siteGet(mainPageURL)
 
 
             $ = cheerio.load(mainPageHTML.data)
 
-            //SCRAPES SUBTITLE PAGE LINK, SUBTITLE LANGUAGE AND CD NUMBER FOR MOVIES. 
-            //IT DOESN'T SCRAPE IF CD NUMBER MORE THAN 1. 
+            //SCRAPES SUBTITLE PAGE LINK, SUBTITLE LANGUAGE AND CD NUMBER FOR MOVIES.
+            //IT DOESN'T SCRAPE IF CD NUMBER MORE THAN 1.
             //IT DOESN'T SCRAPE IF THE SUBTITLE IS NOT TURKISH.
             if (type === "movie") {
                 $('.altyazi-list-wrapper  > div > div').each((i, section) => {
@@ -104,7 +104,7 @@ async function subtitlePageFinder(imdbId, type, season, episode) {
 
                     if (subLang === "flagtr" && subPageURL !== undefined && cd === 1) {
 
-                        subPageURL = process.env.PROXY_URL + subPageURL
+                        subPageURL = SITE_URL + subPageURL
                         subLang = subLang.substring(4)
                         subtitlesData.push({ lang: subLang, pageUrl: subPageURL })
                     }
@@ -142,7 +142,7 @@ async function subtitlePageFinder(imdbId, type, season, episode) {
                     if (subLang === "flagtr" && subPageURL !== undefined && season === seasonNumber) {
 
                         if (episode === episodeNumber || episodeNumber === "Paket") {
-                            subPageURL = subPageURL
+                            subPageURL = SITE_URL + subPageURL
                             subLang = subLang.substring(4)
                             subtitlesData.push({ lang: subLang, pageUrl: subPageURL, season: seasonNumber, episode: episodeNumber })
                         }
@@ -155,13 +155,14 @@ async function subtitlePageFinder(imdbId, type, season, episode) {
 
             for (let i = 0; i < subtitlesData.length; i++) {
                 let subIDs = await subIDfinder(subtitlesData[i].pageUrl)
+                if (!subIDs || !subIDs.length) continue;
                 let idid = subIDs[0].idid;
                 let altid = subIDs[0].altid;
                 let sidid = subIDs[0].sidid;
                 let lang = "tur";
 
 
-                //CHECK MOVİE OR SERİES 
+                //CHECK MOVİE OR SERİES
                 if (isNaN(episode)) episode = "movie-0";
 
 

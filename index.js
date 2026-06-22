@@ -12,7 +12,8 @@ const subtitlePageFinder = require("./scraper");
 const MANIFEST = require('./manifest');
 const NodeCache = require("node-cache");
 const rateLimit = require('express-rate-limit')
-const header = require("./header");
+const { sitePost } = require("./client");
+const { SITE_URL } = require("./flaresolverr");
 const path = require("path");
 const chardet = require('chardet');
 const ass2srt = require('ass-to-srt');
@@ -243,9 +244,9 @@ app.get('/download/:idid\-:sidid\-:altid\-:episode', async function (req, res) {
       let checkSubtitle = await SubtitleAvailableCheck(req.params.altid, episode);
       if (checkSubtitle !== '') return res.send(checkSubtitle)
     } else {
-      var response = await axios({url: process.env.PROXY_URL + '/ind', method: "POST", headers: header, data: `idid=${req.params.idid}&altid=${req.params.altid}&sidid=${req.params.sidid}`, responseType: 'arraybuffer', responseEncoding: 'utf8' });
+      var response = await sitePost(SITE_URL + '/ind', `idid=${req.params.idid}&altid=${req.params.altid}&sidid=${req.params.sidid}`, { responseType: 'arraybuffer', responseEncoding: 'utf8', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
 
-      if (response && response.status === 200 && response.statusText === 'OK') {
+      if (response && response.status === 200) {
         fs.writeFileSync(path.join(__dirname, "subs", req.params.altid + ".zip"), response.data, { encoding: 'utf8' })
         //extract zip
         fs.createReadStream(path.join(__dirname, "subs", req.params.altid + ".zip")).pipe(unzipper.Extract({ path: path.join(__dirname, "subs", req.params.altid) })).on('error', (err) => console.error('Hata:', err.message)).on("entry", (entry) => { entry.pipe(fs.createWriteStream(entry.path, { encoding: 'utf8' })); }).on("close", async () => {
