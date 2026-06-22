@@ -1,16 +1,15 @@
 module.exports={
-    id: "org.store.turkcealtyaziorg-stremio-addon",
-    version: "1.2.3",
-    name: "[NEW] TurkceAltyazi.Org",
-    logo: "https://raw.githubusercontent.com/aflextr/turkcealtyaziorg-stremio-addon/main/images/logo.png",
-    description: "Bu eklenti,TurkceAltyazi.org'dan tüm Türkçe altyazıları alır ve Stremio'nuza getirir.",
-    contactEmail: "eyup.elitass@gmail.com",
+    id: "org.furkan.turkcealtyazi",
+    version: "1.0.0",
+    name: "FurkanTürkçeAltyazı v1.0",
+    logo: "https://raw.githubusercontent.com/guney45/turkcealtyaziorg-stremio-addon/main/images/logo.png",
+    description: "turkcealtyazi.org'dan Türkçe altyazıları çeken, resmi olmayan (unofficial), bireysel kullanım için bir Stremio eklentisidir.",
     types: ["movie", "series"],
-    background: "https://raw.githubusercontent.com/aflextr/turkcealtyaziorg-stremio-addon/main/images/background.gif",
+    background: "https://raw.githubusercontent.com/guney45/turkcealtyaziorg-stremio-addon/main/images/background.gif",
     resources: ["subtitles"],
     catalogs: [],
     idPrefixes: ["tt"],
     behaviorHints:{
-        
+
     }
 };

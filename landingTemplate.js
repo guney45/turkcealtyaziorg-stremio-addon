@@ -153,12 +153,9 @@ function landingTemplate(manifest) {
          </a>
          <div class="separator"></div>
          <div class="separator"></div>
-         <p>TurkceAltyazi.org yurtdışından erişimde CloudFlare ile korunduğundan bu eklentinin çeşitli maliyetleri olmaktadır. Bu maliyetleri ne kadar uzun süre karşılayabilirim bilemediğimden yapacağınız en küçük bağış eklentinin hayatta kalabilmesi için faydalı olacaktır.<br>
+         <p>Resmi olmayan, bireysel kullanım için bir Stremio eklentisi. Altyazılar <a href="https://turkcealtyazi.org" target="_blank" style="color:white;">turkcealtyazi.org</a>'dan gelir.<br>
          <div class="separator"></div>
-         <p><a href="https://www.buymeacoffee.com/mycodelab" target="_blank" style="color: white;">Buy Me A Coffee</a></p>
-         <p>İletişim: eyup.elitass@gmail.com</p>
-         <a target='_blank' href='https://github.com/aflextr/turkcealtyaziorg-stremio-addon'>Github</a>
-         <a target='_blank' href='https://raw.githubusercontent.com/aflextr/donated-to-me/refs/heads/main/donate'><h4>Bağış yapanlara teşekkür ederim.</h4></a>
+         <a target='_blank' href='https://github.com/guney45/turkcealtyaziorg-stremio-addon' style="color:white;">GitHub</a>
 
       </div>
       <script>
