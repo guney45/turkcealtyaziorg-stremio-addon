@@ -270,15 +270,21 @@ app.get('/:userConf?/subtitles/:type/:imdbId/:query?.json', async function (req,
     let season = Number(imdbId.split(":")[1])
     let episode = Number(imdbId.split(":")[2])
 
-    if (myCache.has(req.params.imdbId)) {
-      respond(res, myCache.get(req.params.imdbId));
+    // İndirme linkleri için temel adres: HOST_URL verilmişse o kullanılır,
+    // verilmezse gelen isteğin Host başlığından türetilir (TV/telefon için doğru).
+    const proto = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || req.protocol || 'http';
+    const baseUrl = process.env.HOST_URL || `${proto}://${req.headers.host}`;
+    const cacheKey = `${baseUrl}|${req.params.imdbId}`;
+
+    if (myCache.has(cacheKey)) {
+      respond(res, myCache.get(cacheKey));
     } else {
-      const subtitles = await subtitlePageFinder(videoId, type, season, episode);
+      const subtitles = await subtitlePageFinder(videoId, type, season, episode, baseUrl);
       if (subtitles.length > 0) {
-        myCache.set(req.params.imdbId, { subtitles: subtitles, cacheMaxAge: CACHE_MAX_AGE, staleRevalidate: STALE_REVALIDATE_AGE, staleError: STALE_ERROR_AGE }, 45 * 60) // 45 mins
+        myCache.set(cacheKey, { subtitles: subtitles, cacheMaxAge: CACHE_MAX_AGE, staleRevalidate: STALE_REVALIDATE_AGE, staleError: STALE_ERROR_AGE }, 45 * 60) // 45 mins
         respond(res, { subtitles: subtitles, cacheMaxAge: CACHE_MAX_AGE, staleRevalidate: STALE_REVALIDATE_AGE, staleError: STALE_ERROR_AGE });
       } else {
-        myCache.set(req.params.imdbId, { subtitles: subtitles }, 2 * 60) // 2 mins
+        myCache.set(cacheKey, { subtitles: subtitles }, 2 * 60) // 2 mins
         respond(res, { subtitles: subtitles });
       }
     }

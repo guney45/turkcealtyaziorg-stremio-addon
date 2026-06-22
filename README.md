@@ -65,22 +65,29 @@ ile aşar.
 ### Docker Compose ile (önerilen)
 
 ```sh
-HOST_URL=https://senin-adresin docker compose up -d --build
+docker compose up -d --build
 ```
 
 Bu komut hem addon'u (`:7000`) hem de FlareSolverr'ı ayağa kaldırır.
 
-**Port 7000 doluysa** `PORT` ile başka bir port seç (HOST_URL'deki port ile aynı olsun):
+**Port 7000 doluysa** `PORT` ile başka bir port seç:
 
 ```sh
-PORT=7701 HOST_URL=http://127.0.0.1:7701 docker compose up -d --build
+PORT=7701 docker compose up -d --build
 ```
+
+Stremio'ya ekle: tarayıcıda `http://127.0.0.1:7701/` aç → Install, veya
+`http://127.0.0.1:7701/addon/manifest.json`.
+
+> `docker compose logs/ps/down` gibi komutları sorunsuz çalıştırmak için
+> dilersen `PORT` ve `HOST_URL`'i bir kez `.env` dosyasına yaz; compose bu
+> dosyayı otomatik okur.
 
 ### Ayarlar (.env)
 
 | Değişken | Açıklama |
 |---|---|
-| `HOST_URL` | Addon'un dış adresi (indirme linkleri bundan üretilir) — **zorunlu** |
+| `HOST_URL` | (opsiyonel) Addon'un dış adresi. Boşsa indirme linkleri gelen isteğin adresinden türetilir. Sabit domain/reverse-proxy arkasında elle ver. |
 | `SITE_URL` | Kaynak site, varsayılan `https://turkcealtyazi.org` |
 | `FLARESOLVERR_URL` | FlareSolverr adresi, ör. `http://flaresolverr:8191/v1` |
 | `SEARCH_PATH` | (opsiyonel) Arama yolu; boşsa `/ajax/things_.php` ve `/things_.php` denenir |

@@ -78,7 +78,7 @@ async function subIDfinder(subLink) {
 }
 
 
-async function subtitlePageFinder(imdbId, type, season, episode) {
+async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
 
     try {
 
@@ -166,7 +166,8 @@ async function subtitlePageFinder(imdbId, type, season, episode) {
                 if (isNaN(episode)) episode = "movie-0";
 
 
-                var url = `${process.env.HOST_URL}/download/${idid}-${sidid}-${altid}-${episode}`;
+                const hostBase = baseUrl || process.env.HOST_URL || "";
+                var url = `${hostBase}/download/${idid}-${sidid}-${altid}-${episode}`;
 
 
                 stremioElements.push({ url, lang, id: altid, episode })

@@ -4,11 +4,15 @@
 # addon ile FlareSolverr aynı ağda/sunucuda çalışmalı ki ikisi de aynı genel
 # IP'den çıksın; aksi halde FlareSolverr'ın aldığı cookie addon'da geçersiz olur.
 #
-# Kullanım:
-#   HOST_URL=https://senin-adresin docker compose up -d --build
+# Kullanım (en basit):
+#   docker compose up -d --build
 #
-# Port 7000 doluysa PORT ile değiştir (HOST_URL ile aynı portu ver):
-#   PORT=7701 HOST_URL=http://127.0.0.1:7701 docker compose up -d --build
+# Port 7000 doluysa PORT ile değiştir:
+#   PORT=7701 docker compose up -d --build
+#
+# Sabit bir domain/reverse-proxy arkasındaysan HOST_URL ver (yoksa indirme
+# linkleri otomatik olarak gelen isteğin adresinden türetilir):
+#   HOST_URL=https://senin-adresin docker compose up -d --build
 
 services:
   flaresolverr:
@@ -26,7 +30,9 @@ services:
       - flaresolverr
     environment:
       - PORT=${PORT:-7000}
-      - HOST_URL=${HOST_URL:?HOST_URL gerekli (addon'un dış adresi)}
+      # HOST_URL opsiyonel: boşsa indirme linkleri gelen isteğin adresinden
+      # türetilir. Reverse-proxy/sabit domain arkasındaysan elle ver.
+      - HOST_URL=${HOST_URL:-}
       - SITE_URL=https://turkcealtyazi.org
       - FLARESOLVERR_URL=http://flaresolverr:8191/v1
     ports:
