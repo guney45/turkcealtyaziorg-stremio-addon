@@ -70,6 +70,12 @@ HOST_URL=https://senin-adresin docker compose up -d --build
 
 Bu komut hem addon'u (`:7000`) hem de FlareSolverr'ı ayağa kaldırır.
 
+**Port 7000 doluysa** `PORT` ile başka bir port seç (HOST_URL'deki port ile aynı olsun):
+
+```sh
+PORT=7701 HOST_URL=http://127.0.0.1:7701 docker compose up -d --build
+```
+
 ### Ayarlar (.env)
 
 | Değişken | Açıklama |

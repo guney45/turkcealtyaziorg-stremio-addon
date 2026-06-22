@@ -6,6 +6,9 @@
 #
 # Kullanım:
 #   HOST_URL=https://senin-adresin docker compose up -d --build
+#
+# Port 7000 doluysa PORT ile değiştir (HOST_URL ile aynı portu ver):
+#   PORT=7701 HOST_URL=http://127.0.0.1:7701 docker compose up -d --build
 
 services:
   flaresolverr:
@@ -22,10 +25,10 @@ services:
     depends_on:
       - flaresolverr
     environment:
-      - PORT=7000
+      - PORT=${PORT:-7000}
       - HOST_URL=${HOST_URL:?HOST_URL gerekli (addon'un dış adresi)}
       - SITE_URL=https://turkcealtyazi.org
       - FLARESOLVERR_URL=http://flaresolverr:8191/v1
     ports:
-      - "7000:7000"
+      - "${PORT:-7000}:${PORT:-7000}"
     restart: unless-stopped
