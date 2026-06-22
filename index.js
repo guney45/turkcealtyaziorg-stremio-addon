@@ -279,7 +279,7 @@ app.get('/:userConf?/subtitles/:type/:imdbId/:query?.json', async function (req,
     if (myCache.has(cacheKey)) {
       respond(res, myCache.get(cacheKey));
     } else {
-      const subtitles = await subtitlePageFinder(videoId, type, season, episode, baseUrl);
+      const subtitles = (await subtitlePageFinder(videoId, type, season, episode, baseUrl)) || [];
       if (subtitles.length > 0) {
         myCache.set(cacheKey, { subtitles: subtitles, cacheMaxAge: CACHE_MAX_AGE, staleRevalidate: STALE_REVALIDATE_AGE, staleError: STALE_ERROR_AGE }, 45 * 60) // 45 mins
         respond(res, { subtitles: subtitles, cacheMaxAge: CACHE_MAX_AGE, staleRevalidate: STALE_REVALIDATE_AGE, staleError: STALE_ERROR_AGE });

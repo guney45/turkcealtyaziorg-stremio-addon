@@ -176,8 +176,10 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
             return stremioElements;
 
         }
+        return [];
     } catch (e) {
         console.error("Error happened on subtitlePageFinder", e);
+        return [];
     }
 
 }
