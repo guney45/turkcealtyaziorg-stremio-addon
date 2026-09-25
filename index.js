@@ -6,15 +6,13 @@ const app = express();
 const fs = require("fs");
 const subsrt = require("subtitle-converter");
 const iconv = require("iconv-lite");
-const unzipper = require("unzipper");
 const Axios = require('axios')
 const subtitlePageFinder = require("./scraper");
 const MANIFEST = require('./manifest');
 const NodeCache = require("node-cache");
 const rateLimit = require('express-rate-limit')
-const { sitePost } = require("./client");
 const { SITE_URL, FLARESOLVERR_URL, solve } = require("./flaresolverr");
-const { ensureHeaders } = require("./header");
+const { ensureSubtitleFolder, listSubtitleFiles, pickSubtitleFile, decodeTarget } = require("./packs");
 const path = require("path");
 const chardet = require('chardet');
 const ass2srt = require('ass-to-srt');
@@ -153,86 +151,6 @@ function CheckFolderAndFiles() {
 }
 
 
-const SUB_EXTS = [".srt", ".ass", ".ssa", ".sub", ".vtt", ".smi"];
-const SUBS_DIR = path.join(__dirname, "subs");
-
-function listSubtitleFiles(dir) {
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .filter((f) => SUB_EXTS.includes(path.extname(f).toLowerCase()))
-    .filter((f) => fs.statSync(path.join(dir, f)).isFile())
-    .sort();
-}
-
-function pickSubtitleFile(files, episode) {
-  if (!files.length) return "";
-  if (episode == "movie-0" || files.length == 1) return files[0];
-
-  const checks = ["e" + episode, "b" + episode, "_" + episode + "_", "-" + episode, "x" + episode, episode];
-  for (const check of checks) {
-    const found = files.find((f) => f.toLowerCase().includes(check));
-    if (found) return found;
-  }
-  return "";
-}
-
-// Zip'i bellekte açar; klasör yapısını düzleştirip sadece altyazı dosyalarını
-// subs/<altid>/ altına yazar. Yazılan dosya sayısını döner.
-async function extractZip(buffer, targetDir) {
-  const directory = await unzipper.Open.buffer(buffer);
-  fs.mkdirSync(targetDir, { recursive: true });
-  let count = 0;
-  for (const entry of directory.files) {
-    if (entry.type !== "File") continue;
-    const name = path.basename(entry.path);
-    if (!SUB_EXTS.includes(path.extname(name).toLowerCase())) continue;
-    fs.writeFileSync(path.join(targetDir, name), await entry.buffer());
-    count++;
-  }
-  return count;
-}
-
-function isZip(buffer) {
-  return buffer && buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4b;
-}
-
-async function downloadZip(idid, sidid, altid) {
-  const body = `idid=${idid}&altid=${altid}&sidid=${sidid}`;
-  const opts = { responseType: 'arraybuffer', cache: false, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } };
-
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    if (attempt > 1) await ensureHeaders({ force: true });
-    const response = await sitePost(SITE_URL + '/ind', body, opts);
-    const buffer = response && response.data ? Buffer.from(response.data) : null;
-    if (response && response.status === 200 && isZip(buffer)) return buffer;
-    console.log(`[download] ${altid}: zip gelmedi (deneme ${attempt}, status=${response && response.status}, ${buffer ? buffer.length : 0} bayt)`);
-  }
-  throw new Error("turkcealtyazi.org zip dosyası vermedi (anti-bot engeli olabilir)");
-}
-
-// Aynı altyazı için eşzamanlı gelen istekler tek indirmeyi paylaşsın.
-const inflightDownloads = new Map();
-
-async function ensureSubtitleFolder(idid, sidid, altid) {
-  const dir = path.join(SUBS_DIR, altid);
-  if (listSubtitleFiles(dir).length) return dir;
-
-  if (!inflightDownloads.has(altid)) {
-    inflightDownloads.set(altid, (async () => {
-      // Önceki başarısız denemeden kalan boş/bozuk klasörü temizle.
-      fs.rmSync(dir, { recursive: true, force: true });
-      const buffer = await downloadZip(idid, sidid, altid);
-      const count = await extractZip(buffer, dir);
-      if (!count) {
-        fs.rmSync(dir, { recursive: true, force: true });
-        throw new Error("zip içinde altyazı dosyası yok");
-      }
-      return dir;
-    })().finally(() => inflightDownloads.delete(altid)));
-  }
-  return inflightDownloads.get(altid);
-}
-
 app.get('/download/:idid\-:sidid\-:altid\-:episode', async function (req, res) {
   const { idid, sidid, altid } = req.params;
   try {
@@ -240,17 +158,16 @@ app.get('/download/:idid\-:sidid\-:altid\-:episode', async function (req, res) {
       return res.status(400).send("Geçersiz altyazı kimliği.");
     }
 
-    var episode = req.params.episode;
-    if (episode < 10) episode = "0" + episode;
+    const target = decodeTarget(req.params.episode);
 
     CheckFolderAndFiles();
 
     const dir = await ensureSubtitleFolder(idid, sidid, altid);
-    const file = pickSubtitleFile(listSubtitleFiles(dir), episode);
+    const file = pickSubtitleFile(listSubtitleFiles(dir), target);
     const sub = file ? await getsub(path.join(dir, file)) : null;
 
     if (!sub || !sub.text) {
-      console.log(`[download] ${altid}: bölüm ${episode} için uygun altyazı bulunamadı`);
+      console.log(`[download] ${altid}: bölüm ${req.params.episode} için uygun altyazı bulunamadı`);
       return res.status(404).send("Altyazı bulunamadı.");
     }
 
@@ -306,6 +223,7 @@ function rankSubtitles(raw, filename) {
     .map((s, i) => {
       const parts = [`A${i + 1}`, s.downloads];
       if (s.fps) parts.push(s.fps);
+      if (s.packFile != null) parts.push("P" + s.packFile);
       return { id: s.id, url: s.url, lang: s.lang, label: parts.join("-") };
     });
 }

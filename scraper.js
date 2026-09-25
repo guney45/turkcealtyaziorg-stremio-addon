@@ -2,6 +2,8 @@ const cheerio = require('cheerio');
 require("dotenv").config({ path: "./.env" });
 const { siteGet } = require("./client");
 const { SITE_URL } = require("./flaresolverr");
+const { absoluteEpisode } = require("./episodes");
+const { ensureSubtitleFolder, listSubtitleFiles, pickSubtitleFile, fileEpisodeInfo, encodeTarget } = require("./packs");
 
 // Arama (autocomplete) endpoint yolu. Sitenin yapısına göre değişebildiği için
 // SEARCH_PATH ile elle verilebilir; verilmezse bilinen iki aday sırayla denenir.
@@ -91,11 +93,14 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
     try {
 
         let subtitlesData = [];
+        let seriesTarget = null;
+        let fallbackData = [];
 
         //GOES TO THE MAIN PAGE FOR THE MOVIE/SERIES.
         const mainPageURL = await mainPageFinder(imdbId)
         if (typeof(mainPageURL) != "undefined" && mainPageURL.length > 0) {
 
+            const absolute = type === "movie" ? null : await absoluteEpisode(imdbId, season, episode);
             const mainPageHTML = await siteGet(mainPageURL)
 
 
@@ -119,67 +124,54 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
                 }).get()
 
 
-                //SCRAPES SUBTITLE PAGE URL, SUBTITLE LANGUAGE, SEASON AND EPISODE NUMBER. IT LISTS ALSO SUBTITLE PACKS IF THE SEASON NUMBER MATCHS.
+                //DİZİLER: Satır ya sezon+bölüm olarak (göreli) ya da mutlak bölüm
+                //numarasıyla eşleşir. Paketler aday olarak alınır; içlerinde bölüm
+                //gerçekten var mı aşağıda zip açılarak kontrol edilir.
             } else {
+                // Tek bölümlük satırlarda mutlak eşleşme 2. sezondan itibaren anlamlı;
+                // 1. sezonda göreli numarayla karışır (site S3 "E 5" != Stremio S1E5).
+                const absRows = absolute && absolute !== episode;
+
                 $('.altyazi-list-wrapper  > div > div').each((i, section) => {
                     let subPageURL = $(section).children('.alisim').children('.fl').children('a').attr('href');
                     let subLang = $(section).children('.aldil').children('span').attr('class');
-                    let seasonNumber = $(section).children('.alcd').children('b').first().text().trim();
-                    let episodeNumber = $(section).children('.alcd').children('b').last().text().trim();
+                    let seasonNumber = Number($(section).children('.alcd').children('b').first().text().trim());
+                    let episodeText = $(section).children('.alcd').children('b').last().text().trim();
 
-                    if (seasonNumber.indexOf("0") === 0) {
-                        seasonNumber = seasonNumber.substring(1)
+                    if (subLang !== "flagtr" || subPageURL === undefined || !seasonNumber) return;
+
+                    const isPack = /paket/i.test(episodeText);
+                    const range = episodeText.split(/[~-]/).map(Number);
+                    const inRange = (n) => range.length === 2 ? n >= range[0] && n <= range[1] : n === range[0];
+
+                    let match = false;
+                    if (isPack) {
+                        match = seasonNumber === season || !!absolute;
+                    } else if (seasonNumber === season && inRange(episode)) {
+                        match = true;
+                    } else if (absRows && seasonNumber !== season && inRange(absolute)) {
+                        match = true;
                     }
 
-                    if (episodeNumber.indexOf("0") === 0) {
-                        episodeNumber = (episodeNumber.substring(1))
-                    }
-
-                    seasonNumber = Number(seasonNumber);
-
-                    if (episodeNumber === "Paket" || episodeNumber === "paket") {
-                        episodeNumber = "Paket";
-                    } else if (episode <= Number(episodeNumber.split("~")[1]) && episode >= Number(episodeNumber.split("~")[0])) {
-                        episodeNumber = episode;
-                    } else if (episode <= Number(episodeNumber.split("-")[1]) && episode >= Number(episodeNumber.split("-")[0])) {
-                        episodeNumber = episode;
-                    } else {
-                        episodeNumber = Number(episodeNumber);
-                    }
-
-                    if (subLang === "flagtr" && subPageURL !== undefined && season === seasonNumber) {
-
-                        if (episode === episodeNumber || episodeNumber === "Paket") {
-                            subPageURL = SITE_URL + subPageURL
-                            subLang = subLang.substring(4)
-                            subtitlesData.push({ lang: subLang, pageUrl: subPageURL, season: seasonNumber, episode: episodeNumber, ...rowMeta(section) })
-                        }
+                    if (match) {
+                        subtitlesData.push({ lang: "tr", pageUrl: SITE_URL + subPageURL, season: seasonNumber, isPack, ...rowMeta(section) })
                     }
                 }).get()
+
+                seriesTarget = { season, episode, absolute };
+
+                // Başka sezonların paketlerine (indirmesi pahalı) yalnızca aynı
+                // sezonda hiçbir şey çıkmazsa bakılır.
+                const primary = subtitlesData.filter((d) => !d.isPack || d.season === season);
+                const secondary = subtitlesData.filter((d) => d.isPack && d.season !== season);
+                subtitlesData = primary;
+                fallbackData = secondary;
             }
 
             //CREATES DOWNLOAD LINK FOR THE POST REQUEST.
-            let stremioElements = []
-
-            for (let i = 0; i < subtitlesData.length; i++) {
-                let subIDs = await subIDfinder(subtitlesData[i].pageUrl)
-                if (!subIDs || !subIDs.length) continue;
-                let idid = subIDs[0].idid;
-                let altid = subIDs[0].altid;
-                let sidid = subIDs[0].sidid;
-                let lang = "tur";
-                const { fps, downloads, release } = subtitlesData[i];
-
-
-                //CHECK MOVİE OR SERİES
-                if (isNaN(episode)) episode = "movie-0";
-
-
-                const hostBase = baseUrl || process.env.HOST_URL || "";
-                var url = `${hostBase}/download/${idid}-${sidid}-${altid}-${episode}`;
-
-
-                stremioElements.push({ url, lang, id: altid, episode, fps, downloads, release })
+            let stremioElements = await buildElements(subtitlesData, seriesTarget, baseUrl);
+            if (!stremioElements.length && fallbackData.length) {
+                stremioElements = await buildElements(fallbackData, seriesTarget, baseUrl);
             }
 
             return stremioElements;
@@ -191,6 +183,45 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
         return [];
     }
 
+}
+
+async function buildElements(subtitlesData, seriesTarget, baseUrl) {
+    let stremioElements = []
+    const hostBase = baseUrl || process.env.HOST_URL || "";
+
+    for (let i = 0; i < subtitlesData.length; i++) {
+        let subIDs = await subIDfinder(subtitlesData[i].pageUrl)
+        if (!subIDs || !subIDs.length) continue;
+        let idid = subIDs[0].idid;
+        let altid = subIDs[0].altid;
+        let sidid = subIDs[0].sidid;
+        let lang = "tur";
+        const { fps, downloads, release, isPack } = subtitlesData[i];
+
+        let target = null;
+        let packFile = null;
+        if (seriesTarget) {
+            target = { ...seriesTarget, packSeason: subtitlesData[i].season, isPack };
+            // Paketi indirip (diske önbelleklenir) bölümü içeriyor mu bak.
+            if (isPack) {
+                try {
+                    const dir = await ensureSubtitleFolder(idid, sidid, altid);
+                    const file = pickSubtitleFile(listSubtitleFiles(dir), target);
+                    if (!file) continue;
+                    const info = fileEpisodeInfo(file);
+                    packFile = info ? info.episode : "?";
+                } catch (e) {
+                    console.log(`[scraper] paket ${altid} açılamadı:`, e.message);
+                    continue;
+                }
+            }
+        }
+
+        const url = `${hostBase}/download/${idid}-${sidid}-${altid}-${encodeTarget(target)}`;
+        stremioElements.push({ url, lang, id: altid, fps, downloads, release, packFile })
+    }
+
+    return stremioElements;
 }
 
 module.exports = subtitlePageFinder
