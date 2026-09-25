@@ -160,6 +160,7 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
                 let altid = subIDs[0].altid;
                 let sidid = subIDs[0].sidid;
                 let lang = "tur";
+                let label = `Altyazı ${stremioElements.length + 1}`;
 
 
                 //CHECK MOVİE OR SERİES
@@ -170,7 +171,7 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
                 var url = `${hostBase}/download/${idid}-${sidid}-${altid}-${episode}`;
 
 
-                stremioElements.push({ url, lang, id: altid, episode })
+                stremioElements.push({ url, lang, label, id: altid, episode })
             }
 
             return stremioElements;
