@@ -13,7 +13,8 @@ const MANIFEST = require('./manifest');
 const NodeCache = require("node-cache");
 const rateLimit = require('express-rate-limit')
 const { sitePost } = require("./client");
-const { SITE_URL } = require("./flaresolverr");
+const { SITE_URL, FLARESOLVERR_URL, solve } = require("./flaresolverr");
+const { ensureHeaders } = require("./header");
 const path = require("path");
 const chardet = require('chardet');
 const ass2srt = require('ass-to-srt');
@@ -35,6 +36,16 @@ const CACHE_MAX_AGE = 4 * 60 * 60; // 4 hours in seconds
 const STALE_REVALIDATE_AGE = 4 * 60 * 60; // 4 hours
 const STALE_ERROR_AGE = 7 * 24 * 60 * 60; // 7 days
 
+// Tüm yanıtlara CORS başlığı ekle. TV (webOS/Tizen) ve web sürümlerinde Stremio
+// altyazı dosyasını doğrudan tarayıcı fetch'i ile çeker; CORS yoksa dosya
+// indirilir ama oynatıcı onu okuyamaz ve altyazı hiç görünmez.
+app.use(function (req, res, next) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+});
+
 var respond = function (res, data) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
@@ -53,28 +64,19 @@ app.get('/configure', function (req, res) {
     res.send(landing(newManifest));
 })
 
+function buildManifest(configurationRequired) {
+    return {
+        ...MANIFEST,
+        behaviorHints: { ...MANIFEST.behaviorHints, configurable: true, configurationRequired },
+    };
+}
+
 app.get('/manifest.json', function (req, res) {
-    const newManifest = { ...MANIFEST };
-    newManifest.behaviorHints.configurable = true;
-    newManifest.behaviorHints.configurationRequired = true;
-    return respond(res, newManifest);
+    return respond(res, buildManifest(true));
 });
 
 app.get('/:userConf/manifest.json', function (req, res) {
-    try {
-        const newManifest = { ...MANIFEST };
-        if (!((req || {}).params || {}).userConf) return;
-
-        if (req.params.userConf === "configure") {
-           return respond(res, newManifest);
-        }else if (req.params.userConf === "addon") {
-            newManifest.behaviorHints.configurable = true;
-            newManifest.behaviorHints.configurationRequired = false;
-            return respond(res, newManifest);
-        }
-    } catch (error) {
-        console.log(error);
-    }
+    return respond(res, buildManifest(false));
 });
 
 
@@ -151,116 +153,140 @@ function CheckFolderAndFiles() {
 }
 
 
-async function SeriesAndMoviesCheck(altid, episode) {
-  try {
-    var returnValue = '';
-    
-    var files = fs.readdirSync(path.join(__dirname, "subs", altid));
-    var filess = files;
-    const stats = fs.lstatSync(path.join(__dirname, "subs", altid, files[0]));
-    if (stats.isDirectory()) {
-      files = fs.readdirSync(path.join(__dirname, "subs", altid, files[0]));
-      altid = path.join(altid, filess[0]);
-    }
-    files = files.filter(e =>path.extname(e) !== "txt");
-    for await (var value of files) {
-      var checkValue = String(value).trim().toLowerCase();
-      //MOVİE 
-      if (episode == "movie-0") {
-        returnValue = path.join(__dirname, "subs", altid, value);
-        break;
-      }
-      //SERİES
-      else if (checkValue.includes("e" + episode)) {
-        returnValue = path.join(__dirname, "subs", altid, value);
-        break;
+const SUB_EXTS = [".srt", ".ass", ".ssa", ".sub", ".vtt", ".smi"];
+const SUBS_DIR = path.join(__dirname, "subs");
 
-      } else if (checkValue.includes("b" + episode)) {
-        returnValue = path.join(__dirname, "subs", altid, value);
-        break;
-      }
-      else if (checkValue.includes("_" + episode + "_")) {
-        returnValue = path.join(__dirname, "subs", altid, value);
-        break;
-      }
-      else if (checkValue.includes("-" + episode)) {
-        returnValue = path.join(__dirname, "subs", altid, value);
-        break;
-      }
-      else if (checkValue.includes("x" + episode)) {
-        returnValue = path.join(__dirname, "subs", altid, value);
-        break;
-      }
-      else if (checkValue.includes(episode)) {
-        returnValue = path.join(__dirname, "subs", altid, value);
-        break;
-      }
-      else if (files.length == 1) {
-        returnValue = path.join(__dirname, "subs", altid, value);
-        break;
-      }
-    }
-    return returnValue;
-
-
-  } catch (error) {
-    if (error) console.log(error);
-  }
-
+function listSubtitleFiles(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter((f) => SUB_EXTS.includes(path.extname(f).toLowerCase()))
+    .filter((f) => fs.statSync(path.join(dir, f)).isFile())
+    .sort();
 }
 
-async function SubtitleAvailableCheck(altid, episode) {
-  try {
-    let subFilePath = await SeriesAndMoviesCheck(altid, episode);
+function pickSubtitleFile(files, episode) {
+  if (!files.length) return "";
+  if (episode == "movie-0" || files.length == 1) return files[0];
 
-    let textt = await getsub(subFilePath);
-
-    //delete zip file
-
-    if (fs.existsSync(path.join(__dirname, "subs", altid + ".zip"))) {
-      fs.rmSync(path.join(__dirname, "subs", altid + ".zip"));
-    }
-
-    if (textt && typeof (textt.text) !== "undefined" && textt.text !="") {
-      return textt.text
-    }
-  } catch (error) {
-    console.log(error);
+  const checks = ["e" + episode, "b" + episode, "_" + episode + "_", "-" + episode, "x" + episode, episode];
+  for (const check of checks) {
+    const found = files.find((f) => f.toLowerCase().includes(check));
+    if (found) return found;
   }
+  return "";
+}
 
+// Zip'i bellekte açar; klasör yapısını düzleştirip sadece altyazı dosyalarını
+// subs/<altid>/ altına yazar. Yazılan dosya sayısını döner.
+async function extractZip(buffer, targetDir) {
+  const directory = await unzipper.Open.buffer(buffer);
+  fs.mkdirSync(targetDir, { recursive: true });
+  let count = 0;
+  for (const entry of directory.files) {
+    if (entry.type !== "File") continue;
+    const name = path.basename(entry.path);
+    if (!SUB_EXTS.includes(path.extname(name).toLowerCase())) continue;
+    fs.writeFileSync(path.join(targetDir, name), await entry.buffer());
+    count++;
+  }
+  return count;
+}
+
+function isZip(buffer) {
+  return buffer && buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4b;
+}
+
+async function downloadZip(idid, sidid, altid) {
+  const body = `idid=${idid}&altid=${altid}&sidid=${sidid}`;
+  const opts = { responseType: 'arraybuffer', cache: false, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } };
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (attempt > 1) await ensureHeaders({ force: true });
+    const response = await sitePost(SITE_URL + '/ind', body, opts);
+    const buffer = response && response.data ? Buffer.from(response.data) : null;
+    if (response && response.status === 200 && isZip(buffer)) return buffer;
+    console.log(`[download] ${altid}: zip gelmedi (deneme ${attempt}, status=${response && response.status}, ${buffer ? buffer.length : 0} bayt)`);
+  }
+  throw new Error("turkcealtyazi.org zip dosyası vermedi (anti-bot engeli olabilir)");
+}
+
+// Aynı altyazı için eşzamanlı gelen istekler tek indirmeyi paylaşsın.
+const inflightDownloads = new Map();
+
+async function ensureSubtitleFolder(idid, sidid, altid) {
+  const dir = path.join(SUBS_DIR, altid);
+  if (listSubtitleFiles(dir).length) return dir;
+
+  if (!inflightDownloads.has(altid)) {
+    inflightDownloads.set(altid, (async () => {
+      // Önceki başarısız denemeden kalan boş/bozuk klasörü temizle.
+      fs.rmSync(dir, { recursive: true, force: true });
+      const buffer = await downloadZip(idid, sidid, altid);
+      const count = await extractZip(buffer, dir);
+      if (!count) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        throw new Error("zip içinde altyazı dosyası yok");
+      }
+      return dir;
+    })().finally(() => inflightDownloads.delete(altid)));
+  }
+  return inflightDownloads.get(altid);
 }
 
 app.get('/download/:idid\-:sidid\-:altid\-:episode', async function (req, res) {
+  const { idid, sidid, altid } = req.params;
   try {
-    var episode = req.params.episode;
+    if (![idid, sidid, altid].every((v) => /^\d+$/.test(v))) {
+      return res.status(400).send("Geçersiz altyazı kimliği.");
+    }
 
+    var episode = req.params.episode;
     if (episode < 10) episode = "0" + episode;
 
     CheckFolderAndFiles();
-    res.set('Cache-Control', `public, max-age=${CACHE_MAX_AGE}, stale-while-revalidate:${STALE_REVALIDATE_AGE}, stale-if-error:${STALE_ERROR_AGE}`);
 
-    // Check if there are subtitles available
-    if (fs.existsSync(path.join(__dirname, "subs", req.params.altid))) {
-      let checkSubtitle = await SubtitleAvailableCheck(req.params.altid, episode);
-      if (checkSubtitle !== '') return res.send(checkSubtitle)
-    } else {
-      var response = await sitePost(SITE_URL + '/ind', `idid=${req.params.idid}&altid=${req.params.altid}&sidid=${req.params.sidid}`, { responseType: 'arraybuffer', responseEncoding: 'utf8', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    const dir = await ensureSubtitleFolder(idid, sidid, altid);
+    const file = pickSubtitleFile(listSubtitleFiles(dir), episode);
+    const sub = file ? await getsub(path.join(dir, file)) : null;
 
-      if (response && response.status === 200) {
-        fs.writeFileSync(path.join(__dirname, "subs", req.params.altid + ".zip"), response.data, { encoding: 'utf8' })
-        //extract zip
-        fs.createReadStream(path.join(__dirname, "subs", req.params.altid + ".zip")).pipe(unzipper.Extract({ path: path.join(__dirname, "subs", req.params.altid) })).on('error', (err) => console.error('Hata:', err.message)).on("entry", (entry) => { entry.pipe(fs.createWriteStream(entry.path, { encoding: 'utf8' })); }).on("close", async () => {
-          let checkSubtitle = await SubtitleAvailableCheck(req.params.altid, episode);
-          if (checkSubtitle !== '') return res.send(checkSubtitle)
-        });
-      }
+    if (!sub || !sub.text) {
+      console.log(`[download] ${altid}: bölüm ${episode} için uygun altyazı bulunamadı`);
+      return res.status(404).send("Altyazı bulunamadı.");
     }
 
+    res.set('Cache-Control', `public, max-age=${CACHE_MAX_AGE}, stale-while-revalidate=${STALE_REVALIDATE_AGE}, stale-if-error=${STALE_ERROR_AGE}`);
+    res.set('Content-Type', 'text/plain; charset=utf-8');
+    return res.send(sub.text);
   } catch (err) {
-    console.log(err)
-    return res.send("Couldn't get the subtitle.")
+    console.log(`[download] ${altid} hata:`, err.message);
+    res.set('Cache-Control', 'no-store');
+    return res.status(502).send("Couldn't get the subtitle.");
   }
+});
 
+// Tanılama: tarayıcıdan http://<ip>:7000/debug/tt0816692 (film) veya
+// http://<ip>:7000/debug/tt0944947:1:1 (dizi) açarak zincirin hangi adımda
+// takıldığını görebilirsin.
+app.get('/debug/:imdbId', async function (req, res) {
+  const out = { siteUrl: SITE_URL, flaresolverrUrl: FLARESOLVERR_URL };
+  try {
+    const t0 = Date.now();
+    const sol = await solve(SITE_URL);
+    out.flaresolverr = { ok: !!(sol && sol.cookie), cookieParts: sol && sol.cookie ? sol.cookie.split(";").length : 0, ms: Date.now() - t0 };
+  } catch (e) {
+    out.flaresolverr = { ok: false, error: e.message };
+  }
+  try {
+    const [videoId, season, episode] = req.params.imdbId.split(":");
+    const type = season ? "series" : "movie";
+    out.mainPage = await subtitlePageFinder.mainPageFinder(videoId);
+    const proto = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || req.protocol || 'http';
+    const baseUrl = process.env.HOST_URL || `${proto}://${req.headers.host}`;
+    out.subtitles = await subtitlePageFinder(videoId, type, Number(season), Number(episode), baseUrl);
+  } catch (e) {
+    out.error = e.message;
+  }
+  return respond(res, out);
 });
 
 app.get('/:userConf?/subtitles/:type/:imdbId/:query?.json', async function (req, res) {

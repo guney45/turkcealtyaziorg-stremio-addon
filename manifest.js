@@ -1,6 +1,6 @@
 module.exports={
     id: "org.furkan.turkcealtyazi",
-    version: "1.0.0",
+    version: "1.0.1",
     name: "FurkanTürkçeAltyazı v1.0",
     logo: "https://raw.githubusercontent.com/guney45/turkcealtyaziorg-stremio-addon/main/images/logo.png",
     description: "turkcealtyazi.org'dan Türkçe altyazıları çeken, resmi olmayan (unofficial), bireysel kullanım için bir Stremio eklentisidir.",

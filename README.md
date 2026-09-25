@@ -152,6 +152,21 @@ turkcealtyazi.org seçenekleri orada listelenir. Birden fazla seçenek varsa sı
 
 ## Sorun Giderme
 
+**Önce tanılama sayfasını aç** (telefon/bilgisayar tarayıcısında, kendi IP/port'unla):
+
+```
+http://192.168.1.50:7000/debug/tt0816692          # film (Interstellar)
+http://192.168.1.50:7000/debug/tt0944947:1:1      # dizi (GoT S01E01)
+```
+
+- `flaresolverr.ok: false` → FlareSolverr çalışmıyor/ulaşılamıyor (`docker compose logs -f flaresolverr`).
+- `mainPage: ""` → site aramasına ulaşılamıyor (anti-bot engeli veya site yapısı değişmiş).
+- `subtitles: []` → sayfa bulundu ama Türkçe altyazı listesi okunamadı.
+- Liste doluysa bir `url`'yi tarayıcıda aç; altyazı metni görünmeli.
+
+**Güncelleme sonrası:** `git pull` → `docker compose up -d --build`, ardından Stremio'da
+eklentiyi kaldırıp yeniden ekle (TV'de "Sync addons").
+
 **Hiç altyazı gelmiyor:**
 ```sh
 docker compose logs -f addon

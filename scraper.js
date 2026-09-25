@@ -185,3 +185,4 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
 }
 
 module.exports = subtitlePageFinder
+module.exports.mainPageFinder = mainPageFinder
