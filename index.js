@@ -198,39 +198,59 @@ async function fetchOsSubtitle(id) {
 // Senkronlanmış altyazı: /sync/<referans OS dosya id>/a/<indirme kodu> veya /sync/<ref>/o/<OS dosya id>
 // Kaynak altyazı, oynatılan dosyayla aynı sürüme ait referans altyazının zamanlarına oturtulur.
 const syncCache = new NodeCache({ stdTTL: 6 * 60 * 60, checkperiod: 600 });
+const syncInFlight = new Map();
+const MIN_SYNC_SHIFT = 0.3; // saniye; bundan küçük kayma fark edilmez, -sync verilmez
 
+// Kaynak altyazıyı referansa oturtur. { changed, text } döner; changed=false ise
+// güvenilir eşleşme bulunamamış ya da altyazı zaten senkron demektir.
+async function computeSync(ref, kind, src) {
+  const key = `${ref}|${kind}|${src}`;
+  const cached = syncCache.get(key);
+  if (cached) return cached;
+  if (syncInFlight.has(key)) return syncInFlight.get(key);
+
+  const job = (async () => {
+    let source;
+    if (kind === "o") {
+      source = await fetchOsSubtitle(src);
+    } else {
+      const m = src.match(/^([a-zA-Z0-9]+)-([a-zA-Z0-9]+)-([a-zA-Z0-9]+)-(.+)$/);
+      source = await loadTaSubtitle(m[1], m[2], m[3], m[4]);
+    }
+    if (!source) return null;
+
+    const alignment = findAlignment(await fetchOsSubtitle(ref), source);
+    const changed = !!alignment && (Math.abs(alignment.offset) >= MIN_SYNC_SHIFT || alignment.scale !== 1);
+    if (alignment) {
+      console.log(`[sync] ${kind}/${src} -> ref ${ref}: kayma ${alignment.offset.toFixed(1)}s, ölçek ${alignment.scale.toFixed(4)}, örtüşme %${Math.round(alignment.score * 100)}${changed ? "" : " (zaten senkron)"}`);
+    } else {
+      console.log(`[sync] ${kind}/${src} -> ref ${ref}: güvenilir eşleşme bulunamadı`);
+    }
+    const result = { changed, text: changed ? applyAlignment(source, alignment) : source };
+    syncCache.set(key, result);
+    return result;
+  })();
+
+  syncInFlight.set(key, job);
+  try {
+    return await job;
+  } finally {
+    syncInFlight.delete(key);
+  }
+}
+
+function validSyncParams(ref, kind, src) {
+  return /^\d+$/.test(ref) && ((kind === "o" && /^\d+$/.test(src)) || (kind === "a" && /^[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+-.+$/.test(src)));
+}
+
+// Senkronlanmış altyazı: /sync/<referans OS dosya id>/a/<indirme kodu> veya /sync/<ref>/o/<OS dosya id>
 app.get('/sync/:ref/:kind/:src', async function (req, res) {
   const { ref, kind, src } = req.params;
   try {
-    if (!/^\d+$/.test(ref)) return res.status(400).send("Geçersiz referans.");
-    const key = `${ref}|${kind}|${src}`;
-    let text = syncCache.get(key);
-    if (!text) {
-      let source;
-      if (kind === "o" && /^\d+$/.test(src)) {
-        source = await fetchOsSubtitle(src);
-      } else if (kind === "a") {
-        const m = src.match(/^([a-zA-Z0-9]+)-([a-zA-Z0-9]+)-([a-zA-Z0-9]+)-(.+)$/);
-        if (!m) return res.status(400).send("Geçersiz altyazı kimliği.");
-        source = await loadTaSubtitle(m[1], m[2], m[3], m[4]);
-      } else {
-        return res.status(400).send("Geçersiz altyazı türü.");
-      }
-      if (!source) return res.status(404).send("Altyazı bulunamadı.");
-
-      const reference = await fetchOsSubtitle(ref);
-      const alignment = findAlignment(reference, source);
-      if (alignment) {
-        console.log(`[sync] ${kind}/${src} -> ref ${ref}: kayma ${alignment.offset.toFixed(1)}s, ölçek ${alignment.scale.toFixed(4)}, örtüşme %${Math.round(alignment.score * 100)}`);
-        text = applyAlignment(source, alignment);
-      } else {
-        // Güvenilir eşleşme yoksa altyazı olduğu gibi verilir.
-        console.log(`[sync] ${kind}/${src} -> ref ${ref}: güvenilir eşleşme bulunamadı, değiştirilmedi`);
-        text = source;
-      }
-      syncCache.set(key, text);
-    }
-    return sendSubtitle(res, text);
+    if (!validSyncParams(ref, kind, src)) return res.status(400).send("Geçersiz altyazı kimliği.");
+    const result = await computeSync(ref, kind, src);
+    if (!result) return res.status(404).send("Altyazı bulunamadı.");
+    return sendSubtitle(res, result.text);
   } catch (err) {
     console.log(`[sync] ${kind}/${src} hata:`, err.message);
     res.set('Cache-Control', 'no-store');
@@ -273,32 +293,58 @@ function releaseMatches(release, filename) {
     .some((t) => name.includes(t));
 }
 
-// Her altyazının hemen arkasına, referans altyazıya göre kaydırılmış "-sync" kopyasını ekler.
-function syncUrl(s, ref, baseUrl) {
+// Her altyazı için -sync kopyasının kaynağını belirler (referansın kendisi hariç).
+function syncParams(s, ref) {
   if (!ref) return null;
   if (s.source === "os") {
-    return s.fileId && s.fileId !== ref.fileId ? `${baseUrl}/sync/${ref.fileId}/o/${s.fileId}` : null;
+    return s.fileId && s.fileId !== ref.fileId ? { ref: ref.fileId, kind: "o", src: s.fileId } : null;
   }
   const token = String(s.url).split("/download/")[1];
-  return token ? `${baseUrl}/sync/${ref.fileId}/a/${token}` : null;
+  return token ? { ref: ref.fileId, kind: "a", src: token } : null;
 }
 
-function rankSubtitles(raw, filename, ref, baseUrl) {
+const SYNC_LIST_BUDGET = 15000; // ms; liste bu süreden fazla bekletilmez
+
+// Senkronu hesaplar; sadece altyazı gerçekten kaydırıldıysa true döner. Süre
+// aşılırsa false döner, hesap arka planda sürer ve sonraki istekte kullanılır.
+async function syncChanges(params, deadline) {
+  const job = computeSync(params.ref, params.kind, params.src)
+    .then((r) => !!(r && r.changed))
+    .catch((e) => { console.log(`[sync] ${params.kind}/${params.src} hata:`, e.message); return false; });
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), Math.max(0, deadline - Date.now())));
+  return Promise.race([job, timeout]);
+}
+
+async function rankSubtitles(raw, filename, ref, baseUrl) {
   let taCount = 0, osCount = 0;
-  return raw
+  const ranked = raw
     .map((s) => ({ ...s, match: releaseMatches(s.release, filename) }))
-    .sort((a, b) => (b.match - a.match) || (b.downloads - a.downloads))
-    .flatMap((s) => {
-      // turkcealtyazi.org: A1-3806-23.976, OpenSubtitles: O1-23.976
-      const name = s.source === "os" ? `O${++osCount}` : `A${++taCount}`;
-      const parts = s.source === "os" ? [name] : [name, s.downloads];
-      if (s.fps) parts.push(s.fps);
-      if (s.packFile != null) parts.push("P" + s.packFile);
-      const out = [{ id: s.id, url: s.url, lang: s.lang, label: parts.join("-") }];
-      const url = syncUrl(s, ref, baseUrl);
-      if (url) out.push({ id: s.id + "-sync", url, lang: s.lang, label: name + "-sync" });
-      return out;
-    });
+    .sort((a, b) => (b.match - a.match) || (b.downloads - a.downloads));
+
+  const deadline = Date.now() + SYNC_LIST_BUDGET;
+  const syncs = await Promise.all(ranked.map((s) => {
+    const params = syncParams(s, ref);
+    return params ? syncChanges(params, deadline).then((changed) => ({ params, changed })) : null;
+  }));
+
+  let complete = true;
+  const subtitles = ranked.flatMap((s, i) => {
+    // turkcealtyazi.org: A1-3806-23.976, OpenSubtitles: O1-23.976
+    const name = s.source === "os" ? `O${++osCount}` : `A${++taCount}`;
+    const parts = s.source === "os" ? [name] : [name, s.downloads];
+    if (s.fps) parts.push(s.fps);
+    if (s.packFile != null) parts.push("P" + s.packFile);
+    const out = [{ id: s.id, url: s.url, lang: s.lang, label: parts.join("-") }];
+    const sync = syncs[i];
+    if (sync && sync.changed === null) complete = false;
+    // Sadece gerçekten kaydırılmış altyazılar için -sync eklenir.
+    if (sync && sync.changed) {
+      const { ref: r, kind, src } = sync.params;
+      out.push({ id: s.id + "-sync", url: `${baseUrl}/sync/${r}/${kind}/${src}`, lang: s.lang, label: name + "-sync" });
+    }
+    return out;
+  });
+  return { subtitles, complete };
 }
 
 app.get('/:userConf?/subtitles/:type/:imdbId/:query?.json', async function (req, res) {
@@ -329,8 +375,9 @@ app.get('/:userConf?/subtitles/:type/:imdbId/:query?.json', async function (req,
     // Oynatılan dosyayla aynı sürüme ait altyazı, senkron için referans olur.
     const ref = pickReference(found.references, filename);
     if (ref) console.log(`[subtitles] senkron referansı: ${ref.lang} ${ref.release.trim()}`);
-    const subtitles = rankSubtitles(found.subs, filename, ref, baseUrl);
-    if (subtitles.length > 0) {
+    const { subtitles, complete } = await rankSubtitles(found.subs, filename, ref, baseUrl);
+    // Süresi dolan senkron hesapları varsa Stremio bu listeyi uzun süre saklamasın.
+    if (subtitles.length > 0 && complete) {
       respond(res, { subtitles, cacheMaxAge: CACHE_MAX_AGE, staleRevalidate: STALE_REVALIDATE_AGE, staleError: STALE_ERROR_AGE });
     } else {
       respond(res, { subtitles });
