@@ -78,6 +78,14 @@ async function subIDfinder(subLink) {
 }
 
 
+function rowMeta(section) {
+    return {
+        fps: $(section).children('.alfps').text().trim(),
+        downloads: Number($(section).children('.alindirme').text().replace(/\D/g, '')) || 0,
+        release: $(section).find('.ripdiv').text().replace(/\s+/g, ' ').trim(),
+    };
+}
+
 async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
 
     try {
@@ -106,7 +114,7 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
 
                         subPageURL = SITE_URL + subPageURL
                         subLang = subLang.substring(4)
-                        subtitlesData.push({ lang: subLang, pageUrl: subPageURL })
+                        subtitlesData.push({ lang: subLang, pageUrl: subPageURL, ...rowMeta(section) })
                     }
                 }).get()
 
@@ -144,7 +152,7 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
                         if (episode === episodeNumber || episodeNumber === "Paket") {
                             subPageURL = SITE_URL + subPageURL
                             subLang = subLang.substring(4)
-                            subtitlesData.push({ lang: subLang, pageUrl: subPageURL, season: seasonNumber, episode: episodeNumber })
+                            subtitlesData.push({ lang: subLang, pageUrl: subPageURL, season: seasonNumber, episode: episodeNumber, ...rowMeta(section) })
                         }
                     }
                 }).get()
@@ -160,7 +168,7 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
                 let altid = subIDs[0].altid;
                 let sidid = subIDs[0].sidid;
                 let lang = "tur";
-                let label = `Altyazı ${stremioElements.length + 1}`;
+                const { fps, downloads, release } = subtitlesData[i];
 
 
                 //CHECK MOVİE OR SERİES
@@ -171,7 +179,7 @@ async function subtitlePageFinder(imdbId, type, season, episode, baseUrl) {
                 var url = `${hostBase}/download/${idid}-${sidid}-${altid}-${episode}`;
 
 
-                stremioElements.push({ url, lang, label, id: altid, episode })
+                stremioElements.push({ url, lang, id: altid, episode, fps, downloads, release })
             }
 
             return stremioElements;

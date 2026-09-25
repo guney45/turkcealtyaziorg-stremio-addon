@@ -289,6 +289,32 @@ app.get('/debug/:imdbId', async function (req, res) {
   return respond(res, out);
 });
 
+// Oynatılan dosyanın adı altyazının sürüm adını (ör. "aXXo") içeriyorsa o altyazı
+// aynı kaynaktan yapılmıştır ve senkronu tutar; onu öne al.
+function releaseMatches(release, filename) {
+  if (!release || !filename) return false;
+  const name = filename.toLowerCase();
+  return release.toLowerCase().split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && t !== "genel")
+    .some((t) => name.includes(t));
+}
+
+function formatCount(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
+function rankSubtitles(raw, filename) {
+  return raw
+    .map((s) => ({ ...s, match: releaseMatches(s.release, filename) }))
+    .sort((a, b) => (b.match - a.match) || (b.downloads - a.downloads))
+    .map((s, i) => {
+      const parts = [`Altyazı ${i + 1}`, `${formatCount(s.downloads)} indirme`];
+      if (s.fps) parts.push(`${s.fps} fps`);
+      if (s.match) parts.push("sürüm uyumlu");
+      return { id: s.id, url: s.url, lang: s.lang, label: parts.join(" · ") };
+    });
+}
+
 app.get('/:userConf?/subtitles/:type/:imdbId/:query?.json', async function (req, res) {
   try {
     let { type, imdbId, query } = req.params
@@ -301,18 +327,20 @@ app.get('/:userConf?/subtitles/:type/:imdbId/:query?.json', async function (req,
     const proto = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || req.protocol || 'http';
     const baseUrl = process.env.HOST_URL || `${proto}://${req.headers.host}`;
     const cacheKey = `${baseUrl}|${req.params.imdbId}`;
+    const filename = String(new URLSearchParams(query || "").get("filename") || "");
+    console.log(`[subtitles] ${req.params.imdbId} filename=${filename || "-"}`);
 
-    if (myCache.has(cacheKey)) {
-      respond(res, myCache.get(cacheKey));
+    let raw = myCache.get(cacheKey);
+    if (!raw) {
+      raw = (await subtitlePageFinder(videoId, type, season, episode, baseUrl)) || [];
+      myCache.set(cacheKey, raw, raw.length ? 45 * 60 : 2 * 60);
+    }
+
+    const subtitles = rankSubtitles(raw, filename);
+    if (subtitles.length > 0) {
+      respond(res, { subtitles, cacheMaxAge: CACHE_MAX_AGE, staleRevalidate: STALE_REVALIDATE_AGE, staleError: STALE_ERROR_AGE });
     } else {
-      const subtitles = (await subtitlePageFinder(videoId, type, season, episode, baseUrl)) || [];
-      if (subtitles.length > 0) {
-        myCache.set(cacheKey, { subtitles: subtitles, cacheMaxAge: CACHE_MAX_AGE, staleRevalidate: STALE_REVALIDATE_AGE, staleError: STALE_ERROR_AGE }, 45 * 60) // 45 mins
-        respond(res, { subtitles: subtitles, cacheMaxAge: CACHE_MAX_AGE, staleRevalidate: STALE_REVALIDATE_AGE, staleError: STALE_ERROR_AGE });
-      } else {
-        myCache.set(cacheKey, { subtitles: subtitles }, 2 * 60) // 2 mins
-        respond(res, { subtitles: subtitles });
-      }
+      respond(res, { subtitles });
     }
 
   } catch (err) {
