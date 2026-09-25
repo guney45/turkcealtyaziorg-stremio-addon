@@ -7,6 +7,16 @@ const Axios = require("axios");
 const { absoluteEpisode } = require("./episodes");
 
 const OPENSUBTITLES_URL = process.env.OPENSUBTITLES_URL || "https://opensubtitles-v3.strem.io";
+const OS_FILE_BASE = "https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/";
+
+function fileId(url) {
+  const m = String(url).match(/\/src-api\/file\/(\d+)$/);
+  return m ? m[1] : null;
+}
+
+function fileUrl(id) {
+  return OS_FILE_BASE + id;
+}
 
 async function query(type, id) {
   try {
@@ -27,21 +37,27 @@ async function openSubtitlesFinder(imdbId, type, season, episode) {
 
   const results = await Promise.all(ids.map((id) => query(type, id)));
   const seen = new Set();
-  const out = [];
+  const turkish = [];
+  const references = []; // senkron için referans adayları (tüm diller)
   for (const s of results.flat()) {
-    if (s.lang !== "tur" || !s.url || seen.has(s.id)) continue;
+    if (!s.url || seen.has(s.id)) continue;
     seen.add(s.id);
-    out.push({
+    const release = s.movieReleaseName || s.subtitleFileName || "";
+    const fid = fileId(s.url);
+    if (fid) references.push({ fileId: fid, lang: s.lang, release: [s.movieReleaseName, s.subtitleFileName].join(" ") });
+    if (s.lang !== "tur") continue;
+    turkish.push({
       source: "os",
       id: "os-" + s.id,
       url: s.url,
+      fileId: fid,
       lang: "tur",
       downloads: 0,
       fps: s.fpsMilli ? String(s.fpsMilli / 1000) : "",
-      release: s.movieReleaseName || s.subtitleFileName || "",
+      release,
     });
   }
-  return out;
+  return { turkish, references };
 }
 
-module.exports = { openSubtitlesFinder };
+module.exports = { openSubtitlesFinder, fileUrl };

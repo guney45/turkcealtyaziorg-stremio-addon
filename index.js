@@ -8,7 +8,8 @@ const subsrt = require("subtitle-converter");
 const iconv = require("iconv-lite");
 const Axios = require('axios')
 const subtitlePageFinder = require("./scraper");
-const { openSubtitlesFinder } = require("./opensubtitles");
+const { openSubtitlesFinder, fileUrl } = require("./opensubtitles");
+const { findAlignment, applyAlignment, pickReference } = require("./subsync");
 const MANIFEST = require('./manifest');
 const NodeCache = require("node-cache");
 const rateLimit = require('express-rate-limit')
@@ -152,31 +153,86 @@ function CheckFolderAndFiles() {
 }
 
 
+// turkcealtyazi.org altyazısını (gerekirse paketten doğru bölümü seçerek) SRT metni olarak döndürür.
+async function loadTaSubtitle(idid, sidid, altid, episode) {
+  if (![idid, sidid, altid].every((v) => /^[a-zA-Z0-9]+$/.test(v))) {
+    const err = new Error("Geçersiz altyazı kimliği.");
+    err.status = 400;
+    throw err;
+  }
+  CheckFolderAndFiles();
+  const dir = await ensureSubtitleFolder(idid, sidid, altid);
+  const file = pickSubtitleFile(listSubtitleFiles(dir), decodeTarget(episode));
+  const sub = file ? await getsub(path.join(dir, file)) : null;
+  return sub && sub.text ? sub.text : null;
+}
+
+function sendSubtitle(res, text) {
+  res.set('Cache-Control', `public, max-age=${CACHE_MAX_AGE}, stale-while-revalidate=${STALE_REVALIDATE_AGE}, stale-if-error=${STALE_ERROR_AGE}`);
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  return res.send(text);
+}
+
 app.get('/download/:idid\-:sidid\-:altid\-:episode', async function (req, res) {
-  const { idid, sidid, altid } = req.params;
+  const { idid, sidid, altid, episode } = req.params;
   try {
-    if (![idid, sidid, altid].every((v) => /^[a-zA-Z0-9]+$/.test(v))) {
-      return res.status(400).send("Geçersiz altyazı kimliği.");
-    }
-
-    const target = decodeTarget(req.params.episode);
-
-    CheckFolderAndFiles();
-
-    const dir = await ensureSubtitleFolder(idid, sidid, altid);
-    const file = pickSubtitleFile(listSubtitleFiles(dir), target);
-    const sub = file ? await getsub(path.join(dir, file)) : null;
-
-    if (!sub || !sub.text) {
-      console.log(`[download] ${altid}: bölüm ${req.params.episode} için uygun altyazı bulunamadı`);
+    const text = await loadTaSubtitle(idid, sidid, altid, episode);
+    if (!text) {
+      console.log(`[download] ${altid}: bölüm ${episode} için uygun altyazı bulunamadı`);
       return res.status(404).send("Altyazı bulunamadı.");
     }
-
-    res.set('Cache-Control', `public, max-age=${CACHE_MAX_AGE}, stale-while-revalidate=${STALE_REVALIDATE_AGE}, stale-if-error=${STALE_ERROR_AGE}`);
-    res.set('Content-Type', 'text/plain; charset=utf-8');
-    return res.send(sub.text);
+    return sendSubtitle(res, text);
   } catch (err) {
+    if (err.status === 400) return res.status(400).send(err.message);
     console.log(`[download] ${altid} hata:`, err.message);
+    res.set('Cache-Control', 'no-store');
+    return res.status(502).send("Couldn't get the subtitle.");
+  }
+});
+
+async function fetchOsSubtitle(id) {
+  const res = await axios.get(fileUrl(id), { timeout: 15000, responseType: "text", cache: false });
+  return String(res.data);
+}
+
+// Senkronlanmış altyazı: /sync/<referans OS dosya id>/a/<indirme kodu> veya /sync/<ref>/o/<OS dosya id>
+// Kaynak altyazı, oynatılan dosyayla aynı sürüme ait referans altyazının zamanlarına oturtulur.
+const syncCache = new NodeCache({ stdTTL: 6 * 60 * 60, checkperiod: 600 });
+
+app.get('/sync/:ref/:kind/:src', async function (req, res) {
+  const { ref, kind, src } = req.params;
+  try {
+    if (!/^\d+$/.test(ref)) return res.status(400).send("Geçersiz referans.");
+    const key = `${ref}|${kind}|${src}`;
+    let text = syncCache.get(key);
+    if (!text) {
+      let source;
+      if (kind === "o" && /^\d+$/.test(src)) {
+        source = await fetchOsSubtitle(src);
+      } else if (kind === "a") {
+        const m = src.match(/^([a-zA-Z0-9]+)-([a-zA-Z0-9]+)-([a-zA-Z0-9]+)-(.+)$/);
+        if (!m) return res.status(400).send("Geçersiz altyazı kimliği.");
+        source = await loadTaSubtitle(m[1], m[2], m[3], m[4]);
+      } else {
+        return res.status(400).send("Geçersiz altyazı türü.");
+      }
+      if (!source) return res.status(404).send("Altyazı bulunamadı.");
+
+      const reference = await fetchOsSubtitle(ref);
+      const alignment = findAlignment(reference, source);
+      if (alignment) {
+        console.log(`[sync] ${kind}/${src} -> ref ${ref}: kayma ${alignment.offset.toFixed(1)}s, ölçek ${alignment.scale.toFixed(4)}, örtüşme %${Math.round(alignment.score * 100)}`);
+        text = applyAlignment(source, alignment);
+      } else {
+        // Güvenilir eşleşme yoksa altyazı olduğu gibi verilir.
+        console.log(`[sync] ${kind}/${src} -> ref ${ref}: güvenilir eşleşme bulunamadı, değiştirilmedi`);
+        text = source;
+      }
+      syncCache.set(key, text);
+    }
+    return sendSubtitle(res, text);
+  } catch (err) {
+    console.log(`[sync] ${kind}/${src} hata:`, err.message);
     res.set('Cache-Control', 'no-store');
     return res.status(502).send("Couldn't get the subtitle.");
   }
@@ -217,17 +273,31 @@ function releaseMatches(release, filename) {
     .some((t) => name.includes(t));
 }
 
-function rankSubtitles(raw, filename) {
+// Her altyazının hemen arkasına, referans altyazıya göre kaydırılmış "-sync" kopyasını ekler.
+function syncUrl(s, ref, baseUrl) {
+  if (!ref) return null;
+  if (s.source === "os") {
+    return s.fileId && s.fileId !== ref.fileId ? `${baseUrl}/sync/${ref.fileId}/o/${s.fileId}` : null;
+  }
+  const token = String(s.url).split("/download/")[1];
+  return token ? `${baseUrl}/sync/${ref.fileId}/a/${token}` : null;
+}
+
+function rankSubtitles(raw, filename, ref, baseUrl) {
   let taCount = 0, osCount = 0;
   return raw
     .map((s) => ({ ...s, match: releaseMatches(s.release, filename) }))
     .sort((a, b) => (b.match - a.match) || (b.downloads - a.downloads))
-    .map((s) => {
+    .flatMap((s) => {
       // turkcealtyazi.org: A1-3806-23.976, OpenSubtitles: O1-23.976
-      const parts = s.source === "os" ? [`O${++osCount}`] : [`A${++taCount}`, s.downloads];
+      const name = s.source === "os" ? `O${++osCount}` : `A${++taCount}`;
+      const parts = s.source === "os" ? [name] : [name, s.downloads];
       if (s.fps) parts.push(s.fps);
       if (s.packFile != null) parts.push("P" + s.packFile);
-      return { id: s.id, url: s.url, lang: s.lang, label: parts.join("-") };
+      const out = [{ id: s.id, url: s.url, lang: s.lang, label: parts.join("-") }];
+      const url = syncUrl(s, ref, baseUrl);
+      if (url) out.push({ id: s.id + "-sync", url, lang: s.lang, label: name + "-sync" });
+      return out;
     });
 }
 
@@ -246,17 +316,20 @@ app.get('/:userConf?/subtitles/:type/:imdbId/:query?.json', async function (req,
     const filename = String(new URLSearchParams(query || "").get("filename") || "");
     console.log(`[subtitles] ${req.params.imdbId} filename=${filename || "-"}`);
 
-    let raw = myCache.get(cacheKey);
-    if (!raw) {
+    let found = myCache.get(cacheKey);
+    if (!found) {
       const [ta, os] = await Promise.all([
         subtitlePageFinder(videoId, type, season, episode, baseUrl).catch(() => []),
         openSubtitlesFinder(videoId, type, season, episode),
       ]);
-      raw = [...(ta || []), ...os];
-      myCache.set(cacheKey, raw, raw.length ? 45 * 60 : 2 * 60);
+      found = { subs: [...(ta || []), ...os.turkish], references: os.references };
+      myCache.set(cacheKey, found, found.subs.length ? 45 * 60 : 2 * 60);
     }
 
-    const subtitles = rankSubtitles(raw, filename);
+    // Oynatılan dosyayla aynı sürüme ait altyazı, senkron için referans olur.
+    const ref = pickReference(found.references, filename);
+    if (ref) console.log(`[subtitles] senkron referansı: ${ref.lang} ${ref.release.trim()}`);
+    const subtitles = rankSubtitles(found.subs, filename, ref, baseUrl);
     if (subtitles.length > 0) {
       respond(res, { subtitles, cacheMaxAge: CACHE_MAX_AGE, staleRevalidate: STALE_REVALIDATE_AGE, staleError: STALE_ERROR_AGE });
     } else {
