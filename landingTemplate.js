@@ -166,7 +166,10 @@ function landingTemplate(manifest) {
             console.log(soru.value);
             soru.value = String(soru.value).trim().toLowerCase();
             if(soru.value === 'ankara'){
-               installLink.href = 'stremio://' + window.location.host + '/addon/manifest.json'
+               // stremio:// linkini Stremio https'e çevirir; http sunucuda düz adresi göster.
+               installLink.href = window.location.protocol === 'https:'
+                  ? 'stremio://' + window.location.host + '/addon/manifest.json'
+                  : window.location.origin + '/addon/manifest.json'
                install.disabled = false;
             }else{
                installLink.href = '#'

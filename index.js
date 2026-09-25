@@ -72,7 +72,7 @@ function buildManifest(configurationRequired) {
 }
 
 app.get('/manifest.json', function (req, res) {
-    return respond(res, buildManifest(true));
+    return respond(res, buildManifest(false));
 });
 
 app.get('/:userConf/manifest.json', function (req, res) {
