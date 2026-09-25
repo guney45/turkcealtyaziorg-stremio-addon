@@ -236,7 +236,7 @@ async function ensureSubtitleFolder(idid, sidid, altid) {
 app.get('/download/:idid\-:sidid\-:altid\-:episode', async function (req, res) {
   const { idid, sidid, altid } = req.params;
   try {
-    if (![idid, sidid, altid].every((v) => /^\d+$/.test(v))) {
+    if (![idid, sidid, altid].every((v) => /^[a-zA-Z0-9]+$/.test(v))) {
       return res.status(400).send("Geçersiz altyazı kimliği.");
     }
 
