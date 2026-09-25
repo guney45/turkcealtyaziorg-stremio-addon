@@ -284,13 +284,24 @@ app.get('/debug/:imdbId', async function (req, res) {
 });
 
 // Oynatılan dosyanın adı altyazının sürüm adını (ör. "aXXo") içeriyorsa o altyazı
-// aynı kaynaktan yapılmıştır ve senkronu tutar; onu öne al.
-function releaseMatches(release, filename) {
+// aynı kaynaktan yapılmıştır ve senkronu tutar; onu öne al. Sürüm adlarının
+// çoğunda geçen kelimeler (dizi/film adı gibi) ayırt edici olmadığından sayılmaz.
+function releaseTokens(release) {
+  return new Set(String(release || "").toLowerCase().split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && t !== "genel"));
+}
+
+function commonTokens(raw) {
+  const sets = raw.map((s) => releaseTokens(s.release));
+  const counts = new Map();
+  for (const set of sets) for (const t of set) counts.set(t, (counts.get(t) || 0) + 1);
+  return new Set([...counts].filter(([, n]) => sets.length >= 2 && n >= sets.length / 2).map(([t]) => t));
+}
+
+function releaseMatches(release, filename, common) {
   if (!release || !filename) return false;
   const name = filename.toLowerCase();
-  return release.toLowerCase().split(/[^a-z0-9]+/)
-    .filter((t) => t.length >= 3 && t !== "genel")
-    .some((t) => name.includes(t));
+  return [...releaseTokens(release)].some((t) => !common.has(t) && name.includes(t));
 }
 
 // Her altyazı için -sync kopyasının kaynağını belirler (referansın kendisi hariç).
@@ -317,8 +328,9 @@ async function syncChanges(params, deadline) {
 
 async function rankSubtitles(raw, filename, ref, baseUrl) {
   let taCount = 0, osCount = 0;
+  const common = commonTokens(raw);
   const ranked = raw
-    .map((s) => ({ ...s, match: releaseMatches(s.release, filename) }))
+    .map((s) => ({ ...s, match: releaseMatches(s.release, filename, common) }))
     .sort((a, b) => (b.match - a.match) || (b.downloads - a.downloads));
 
   const deadline = Date.now() + SYNC_LIST_BUDGET;
