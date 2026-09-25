@@ -299,19 +299,14 @@ function releaseMatches(release, filename) {
     .some((t) => name.includes(t));
 }
 
-function formatCount(n) {
-  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-}
-
 function rankSubtitles(raw, filename) {
   return raw
     .map((s) => ({ ...s, match: releaseMatches(s.release, filename) }))
     .sort((a, b) => (b.match - a.match) || (b.downloads - a.downloads))
     .map((s, i) => {
-      const parts = [`Altyazı ${i + 1}`, `${formatCount(s.downloads)} indirme`];
-      if (s.fps) parts.push(`${s.fps} fps`);
-      if (s.match) parts.push("sürüm uyumlu");
-      return { id: s.id, url: s.url, lang: s.lang, label: parts.join(" · ") };
+      const parts = [`A${i + 1}`, s.downloads];
+      if (s.fps) parts.push(s.fps);
+      return { id: s.id, url: s.url, lang: s.lang, label: parts.join("-") };
     });
 }
 
