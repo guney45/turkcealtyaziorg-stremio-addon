@@ -8,6 +8,7 @@ const subsrt = require("subtitle-converter");
 const iconv = require("iconv-lite");
 const Axios = require('axios')
 const subtitlePageFinder = require("./scraper");
+const { openSubtitlesFinder } = require("./opensubtitles");
 const MANIFEST = require('./manifest');
 const NodeCache = require("node-cache");
 const rateLimit = require('express-rate-limit')
@@ -217,11 +218,13 @@ function releaseMatches(release, filename) {
 }
 
 function rankSubtitles(raw, filename) {
+  let taCount = 0, osCount = 0;
   return raw
     .map((s) => ({ ...s, match: releaseMatches(s.release, filename) }))
     .sort((a, b) => (b.match - a.match) || (b.downloads - a.downloads))
-    .map((s, i) => {
-      const parts = [`A${i + 1}`, s.downloads];
+    .map((s) => {
+      // turkcealtyazi.org: A1-3806-23.976, OpenSubtitles: O1-23.976
+      const parts = s.source === "os" ? [`O${++osCount}`] : [`A${++taCount}`, s.downloads];
       if (s.fps) parts.push(s.fps);
       if (s.packFile != null) parts.push("P" + s.packFile);
       return { id: s.id, url: s.url, lang: s.lang, label: parts.join("-") };
@@ -245,7 +248,11 @@ app.get('/:userConf?/subtitles/:type/:imdbId/:query?.json', async function (req,
 
     let raw = myCache.get(cacheKey);
     if (!raw) {
-      raw = (await subtitlePageFinder(videoId, type, season, episode, baseUrl)) || [];
+      const [ta, os] = await Promise.all([
+        subtitlePageFinder(videoId, type, season, episode, baseUrl).catch(() => []),
+        openSubtitlesFinder(videoId, type, season, episode),
+      ]);
+      raw = [...(ta || []), ...os];
       myCache.set(cacheKey, raw, raw.length ? 45 * 60 : 2 * 60);
     }
 
