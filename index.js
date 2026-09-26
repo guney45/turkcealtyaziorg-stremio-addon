@@ -295,7 +295,7 @@ function commonTokens(raw) {
   const sets = raw.map((s) => releaseTokens(s.release));
   const counts = new Map();
   for (const set of sets) for (const t of set) counts.set(t, (counts.get(t) || 0) + 1);
-  return new Set([...counts].filter(([, n]) => sets.length >= 2 && n >= sets.length / 2).map(([t]) => t));
+  return new Set([...counts].filter(([, n]) => n >= 2 && n >= sets.length / 2).map(([t]) => t));
 }
 
 function releaseMatches(release, filename, common) {
